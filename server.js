@@ -1,103 +1,131 @@
 import express from "express";
+import mongoose from "mongoose";
 
 const app = express();
 
+// ========== MIDDLEWARE ==========
+
+// Log every request, then pass it on
+app.use((req, res, next) => {
+  console.log(req.method, req.url);
+  next();
+});
+
+// Read JSON request bodies into req.body
 app.use(express.json());
-app.set("json spaces", 2);
 
-let listings = [
-  { id: 1, title: "Nile View Apartment", pricePerNight: 85 },
-  { id: 2, title: "Beach House", pricePerNight: 140 },
-  { id: 3, title: "Desert Eco-Lodge", pricePerNight: 60 },
-];
-let nextId = 4;
+// ========== DATABASE ==========
 
-// model
-function getAllListings() {
-  return listings;
+async function connectDB() {
+  // Atlas is far away: this can take a few seconds
+  console.log("Connecting to MongoDB...");
+
+  // The connection string, from .env
+  const uri = process.env.MONGODB_URI;
+
+  // dbName picks the database inside your cluster
+  await mongoose.connect(uri, { dbName: "ebd-bnb" });
+  console.log("Connected to MongoDB");
 }
 
-function getListingById(id) {
-  return listings.find((listing) => listing.id === id);
+// ========== MODEL ==========
+
+// The shape of one listing
+const listingSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  pricePerNight: { type: Number, required: true },
+});
+
+// The model: our handle on the "listings" collection
+const Listing = mongoose.model("Listing", listingSchema);
+
+async function getAllListings() {
+  return Listing.find();
 }
 
-function addListing(data) {
-  const listing = {
-    id: nextId++,
-    title: data.title,
-    pricePerNight: data.pricePerNight,
-  };
-  listings.push(listing);
-  return listing;
+async function getListingById(id) {
+  // "abc" can never be an _id: not found
+  if (!mongoose.isValidObjectId(id)) return null;
+  return Listing.findById(id);
 }
 
-function updateListing(id, data) {
-  const listing = getListingById(id);
-  if (listing) {
-    listing.title = data.title;
-    listing.pricePerNight = data.pricePerNight;
-  }
-  return listing;
+async function addListing(data) {
+  // The schema keeps only the fields it knows
+  return Listing.create(data);
 }
 
-function removeListing(id) {
-  const listing = getListingById(id);
-  listings = listings.filter((item) => item.id !== id);
-  return listing;
+async function updateListing(id, data) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  // new: true sends back the listing after the update
+  return Listing.findByIdAndUpdate(id, data, { new: true });
 }
 
-// controller
-function handleGetAll(req, res) {
-  res.json(getAllListings());
+async function removeListing(id) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  return Listing.findByIdAndDelete(id);
 }
 
-function handleGetOne(req, res) {
-  const listing = getListingById(Number(req.params.id));
+// ========== CONTROLLERS ==========
+
+async function handleGetAll(req, res) {
+  res.json(await getAllListings());
+}
+
+async function handleGetOne(req, res) {
+  const listing = await getListingById(req.params.id);
   if (!listing) {
     return res.status(404).json({ error: "Listing not found" });
   }
   res.json(listing);
 }
 
-function handleCreate(req, res) {
-  const data = req.body;
-  if (!data.title || data.pricePerNight == null) {
+async function handleCreate(req, res) {
+  const data = req.body || {}; // no body sent? use an empty object
+  if (!data.title || !data.pricePerNight) {
     return res
       .status(400)
       .json({ error: "title and pricePerNight are required" });
   }
-  const newListing = addListing(data);
-  res.status(201).json(newListing);
+  res.status(201).json(await addListing(data));
 }
 
-function handleUpdate(req, res) {
-  const data = req.body;
-  if (!data.title || data.pricePerNight == null) {
+async function handleUpdate(req, res) {
+  const data = req.body || {};
+  if (!data.title || !data.pricePerNight) {
     return res
       .status(400)
       .json({ error: "title and pricePerNight are required" });
   }
-  const listing = updateListing(Number(req.params.id), data);
+  const listing = await updateListing(req.params.id, data);
   if (!listing) {
     return res.status(404).json({ error: "Listing not found" });
   }
   res.json(listing);
 }
 
-function handleDelete(req, res) {
-  const listing = removeListing(Number(req.params.id));
+async function handleDelete(req, res) {
+  const listing = await removeListing(req.params.id);
   if (!listing) {
     return res.status(404).json({ error: "Listing not found" });
   }
-  res.status(204).end();
+  res.status(204).end(); // done, nothing to send back
 }
 
-// routes
-app.get("/listings", handleGetAll);
-app.get("/listings/:id", handleGetOne);
-app.post("/listings", handleCreate);
-app.put("/listings/:id", handleUpdate);
-app.delete("/listings/:id", handleDelete);
+// ========== ROUTES ==========
+
+app.get("/", (req, res) => {
+  res.send("Welcome to ebd bn'b");
+});
+
+app.get("/api/listings", handleGetAll);
+app.get("/api/listings/:id", handleGetOne);
+app.post("/api/listings", handleCreate);
+app.put("/api/listings/:id", handleUpdate);
+app.delete("/api/listings/:id", handleDelete);
+
+// ========== START ==========
+
+await connectDB(); // no database, no server
 
 app.listen(3000, () => {
   console.log("Server running on http://localhost:3000");
